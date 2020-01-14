@@ -1137,12 +1137,11 @@ int mmc_hwpart_config(struct mmc *mmc,
 
 		ext_csd[EXT_CSD_ERASE_GROUP_DEF] = 1;
 
-#if CONFIG_IS_ENABLED(MMC_WRITE)
 		/* update erase group size to be high-capacity */
+#if CONFIG_IS_ENABLED(MMC_WRITE)
 		mmc->erase_grp_size =
 			ext_csd[EXT_CSD_HC_ERASE_GRP_SIZE] * 1024;
 #endif
-
 	}
 
 	/* all OK, write the configuration */
