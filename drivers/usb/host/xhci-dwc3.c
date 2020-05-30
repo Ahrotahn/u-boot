@@ -7,9 +7,11 @@
  * Author: Ramneek Mehresh<ramneek.mehresh@freescale.com>
  */
 
+#include <clk.h>
 #include <common.h>
 #include <dm.h>
 #include <generic-phy.h>
+#include <reset.h>
 #include <usb.h>
 #include <dwc3-uboot.h>
 
@@ -19,7 +21,9 @@
 #include <linux/usb/otg.h>
 
 struct xhci_dwc3_platdata {
-	struct phy_bulk *usb_phys;
+	struct clk_bulk		clks;
+	struct phy_bulk		usb_phys;
+	struct reset_ctl_bulk	resets;
 };
 
 void dwc3_set_mode(struct dwc3 *dwc3_reg, u32 mode)
@@ -109,6 +113,46 @@ void dwc3_set_fladj(struct dwc3 *dwc3_reg, u32 val)
 }
 
 #if CONFIG_IS_ENABLED(DM_USB)
+static int xhci_dwc3_reset_init(struct udevice *dev,
+				struct xhci_dwc3_platdata *plat)
+{
+	int ret;
+
+	ret = reset_get_bulk(dev, &plat->resets);
+	if (ret == -ENOTSUPP || ret == -ENOENT)
+		return 0;
+	else if (ret)
+		return ret;
+
+	ret = reset_deassert_bulk(&plat->resets);
+	if (ret) {
+		reset_release_bulk(&plat->resets);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int xhci_dwc3_clk_init(struct udevice *dev,
+			      struct xhci_dwc3_platdata *plat)
+{
+	int ret;
+
+	ret = clk_get_bulk(dev, &plat->clks);
+	if (ret == -ENOSYS || ret == -ENOENT)
+		return 0;
+	if (ret)
+		return ret;
+
+	ret = clk_enable_bulk(&plat->clks);
+	if (ret) {
+		clk_release_bulk(&plat->clks);
+		return ret;
+	}
+
+	return 0;
+}
+
 static int xhci_dwc3_probe(struct udevice *dev)
 {
 	struct xhci_hcor *hcor;
@@ -120,11 +164,19 @@ static int xhci_dwc3_probe(struct udevice *dev)
 	u32 reg;
 	int ret;
 
+	ret = xhci_dwc3_clk_init(dev, plat);
+	if (ret)
+		return ret;
+
+	ret = xhci_dwc3_reset_init(dev, plat);
+	if (ret)
+		return ret;
+
 	hccr = (struct xhci_hccr *)((uintptr_t)dev_read_addr(dev));
 	hcor = (struct xhci_hcor *)((uintptr_t)hccr +
 			HC_LENGTH(xhci_readl(&(hccr)->cr_capbase)));
 
-	ret = dwc3_setup_phy(dev, plat->usb_phys);
+	ret = dwc3_setup_phy(dev, &plat->usb_phys);
 	if (ret && (ret != -ENOTSUPP))
 		return ret;
 
@@ -167,7 +219,11 @@ static int xhci_dwc3_remove(struct udevice *dev)
 {
 	struct xhci_dwc3_platdata *plat = dev_get_platdata(dev);
 
-	dwc3_shutdown_phy(dev, plat->usb_phys);
+	dwc3_shutdown_phy(dev, &plat->usb_phys);
+
+	reset_release_bulk(&plat->resets);
+
+	clk_release_bulk(&plat->clks);
 
 	return xhci_deregister(dev);
 }
